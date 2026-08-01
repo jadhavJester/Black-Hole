@@ -59,9 +59,9 @@ float domainWarpFbm(vec3 p) {
   return fbm(p + q * 0.6);
 }
 
-// Planckian Blackbody Radiance Approximation to RGB
-vec3 blackbody(float kelvin) {
-  float temp = clamp(kelvin, 1000.0, 40000.0) / 100.0;
+// Interstellar Gargantua Incandescent Blackbody Palette
+vec3 gargantuaBlackbody(float kelvin) {
+  float temp = clamp(kelvin, 1000.0, 45000.0) / 100.0;
   vec3 col;
 
   if (temp <= 66.0) {
@@ -81,7 +81,9 @@ vec3 blackbody(float kelvin) {
     col.b = clamp((138.5177312231 * log(temp - 10.0) - 305.0447927307) / 255.0, 0.0, 1.0);
   }
 
-  return col;
+  // Gargantua Incandescent Glow Enhancement: Warm Gold/Amber boost
+  vec3 gargantuaGold = vec3(1.15, 0.85, 0.4);
+  return col * gargantuaGold;
 }
 
 // Skybox Texture Sampling on Lensed Rays
@@ -140,7 +142,7 @@ vec3 tonemapACES(vec3 x) {
 vec3 renderPolarJets(vec3 pos, float rs) {
   if (u_jetIntensity <= 0.01) return vec3(0.0);
 
-  float distToAxis = length(pos.xz); // Y-axis is polar jet axis!
+  float distToAxis = length(pos.xz);
   float yAbs = abs(pos.y);
   float maxRadius = 0.15 * yAbs + 0.3 * rs;
 
@@ -194,7 +196,7 @@ void main() {
 
     r = length(rayPos);
 
-    // D-shaped Kerr horizon capture condition (flattened on co-rotating side)
+    // D-shaped Kerr horizon capture condition
     float dShapeOffset = rayPos.x * u_spin * 0.12 * rs;
     if (r + dShapeOffset <= rKerrHorizon * 1.002) {
       hitHorizon = true;
@@ -214,7 +216,7 @@ void main() {
     float distToPhotonSphere = abs(r - rPhoton);
     float stepSize = clamp(0.06 * r, 0.008 * rs, 0.55 * rs);
     if (distToPhotonSphere < 0.4 * rs) {
-      stepSize *= 0.35; // Sub-stepping for photon orbit windings!
+      stepSize *= 0.35; // Fine precision sub-stepping for photon orbit windings!
     }
 
     vec3 prevPos = rayPos;
@@ -225,55 +227,54 @@ void main() {
     vel = normalize(vel);
     rayPos += vel * stepSize;
 
-    // 1. 3D Accretion Disk Equatorial Plane (y = 0) Geodesic Intersection
-    // Rays passing OVER the top curve DOWN toward y=0 (far side halo arc over top)
-    // Rays passing UNDER the bottom curve UP toward y=0 (far side halo arc under bottom)
-    if (u_accretionRate > 0.001 && prevPos.y * rayPos.y <= 0.0) {
-      float tCross = abs(prevPos.y) / (abs(prevPos.y) + abs(rayPos.y));
-      vec3 posCross = mix(prevPos, rayPos, tCross);
-      float rCross = length(posCross.xz); // Radial distance in 3D equatorial x-z plane
+    // 1. Volumetric 3D Accretion Disk Density Sampling (|y| <= hDisk)
+    // Guarantees 100% vibrant visibility & Interstellar Gargantua halo wrap-around from all camera angles!
+    float rXZ = length(rayPos.xz);
+    float hDisk = 0.28 * rs * (1.0 + 0.1 * (rXZ - rISCO) / rs);
 
-      if (rCross >= rISCO && rCross <= rDiskOut) {
-        float rNorm = rCross / rISCO;
-        float tempProfile = pow(rNorm, -0.75) * pow(1.0 - sqrt(1.0 / rNorm), 0.25) * 3.5;
-        float currentTemp = u_diskTemp * max(0.1, tempProfile);
+    if (u_accretionRate > 0.001 && rXZ >= rISCO && rXZ <= rDiskOut && abs(rayPos.y) <= hDisk) {
+      float rNorm = rXZ / rISCO;
+      float tempProfile = pow(rNorm, -0.75) * pow(1.0 - sqrt(1.0 / rNorm), 0.25) * 3.5;
+      float currentTemp = u_diskTemp * max(0.1, tempProfile);
 
-        // 3D Keplerian orbital velocity vector v_orbit = sqrt(GM/r) * (-z, 0, x) / r
-        float beta = sqrt(clamp(rs / (2.0 * rCross), 0.0, 0.49));
-        vec3 rotTangent = normalize(vec3(-posCross.z, 0.0, posCross.x));
-        float vLine = dot(rotTangent, -vel); // Ray direction towards camera
-        float betaLOS = beta * vLine;
+      // Vertical Gaussian density falloff for smooth volumetric disk bounds
+      float verticalFalloff = exp(-pow(rayPos.y / (hDisk * 0.6), 2.0));
 
-        // Lorentz gamma factor
-        float gamma = 1.0 / sqrt(max(0.01, 1.0 - beta * beta));
+      // 3D Keplerian orbital velocity vector v_orbit = sqrt(GM/r) * (-z, 0, x) / r
+      float beta = sqrt(clamp(rs / (2.0 * rXZ), 0.0, 0.49));
+      vec3 rotTangent = normalize(vec3(-rayPos.z, 0.0, rayPos.x));
+      float vLine = dot(rotTangent, -vel);
+      float betaLOS = beta * vLine;
 
-        // Relativistic Doppler beaming factor delta = 1 / (gamma * (1 - betaLOS))
-        float dopplerFactor = 1.0 / (gamma * (1.0 - betaLOS));
+      // Lorentz gamma factor
+      float gamma = 1.0 / sqrt(max(0.01, 1.0 - beta * beta));
 
-        // Gravitational redshift factor
-        float gravRedshift = sqrt(max(0.001, 1.0 - rs / rCross));
-        float shift = dopplerFactor * gravRedshift;
+      // Relativistic Doppler beaming factor delta = 1 / (gamma * (1 - betaLOS))
+      float dopplerFactor = 1.0 / (gamma * (1.0 - betaLOS));
 
-        // Relativistic 4th-power beaming law: I_obs = delta^4 * I_em
-        float relativisticBeaming = pow(dopplerFactor, 4.0);
+      // Gravitational redshift factor
+      float gravRedshift = sqrt(max(0.001, 1.0 - rs / rXZ));
+      float shift = dopplerFactor * gravRedshift;
 
-        vec3 baseColor = blackbody(currentTemp * shift);
-        vec3 shiftTint = mix(vec3(1.2, 0.5, 0.2), vec3(0.4, 0.8, 1.4), smoothstep(0.7, 1.4, dopplerFactor));
-        vec3 radiatedColor = baseColor * shiftTint;
+      // Relativistic 4th-power beaming law: I_obs = delta^4 * I_em
+      float relativisticBeaming = pow(dopplerFactor, 4.0);
 
-        // Domain-warped FBM fluid turbulence advected along Keplerian flow
-        float phiCross = atan(posCross.z, posCross.x);
-        float shearRotation = phiCross * 3.0 - sqrt(rCross) * 2.5 + u_time * (4.0 / sqrt(rNorm));
-        vec3 diskPos = vec3(rCross * 0.4, shearRotation, u_time * 0.4);
-        float turb = domainWarpFbm(diskPos);
-        float density = mix(0.35, 1.35, turb) * u_accretionRate;
+      vec3 baseColor = gargantuaBlackbody(currentTemp * shift);
+      vec3 shiftTint = mix(vec3(1.2, 0.5, 0.2), vec3(0.4, 0.8, 1.4), smoothstep(0.7, 1.4, dopplerFactor));
+      vec3 radiatedColor = baseColor * shiftTint;
 
-        vec3 diskColor = radiatedColor * relativisticBeaming * density;
+      // Domain-warped FBM fluid turbulence advected along Keplerian flow
+      float phiCross = atan(rayPos.z, rayPos.x);
+      float shearRotation = phiCross * 3.0 - sqrt(rXZ) * 2.5 + u_time * (4.0 / sqrt(rNorm));
+      vec3 diskPos = vec3(rXZ * 0.4, shearRotation, u_time * 0.4);
+      float turb = domainWarpFbm(diskPos);
+      float density = mix(0.35, 1.35, turb) * u_accretionRate * verticalFalloff;
 
-        float opacity = clamp(density * 0.75 * (1.0 - (rCross - rISCO) / (rDiskOut - rISCO)), 0.0, 0.95);
-        diskColorAccum += diskColor * opacity * (1.0 - diskAlpha);
-        diskAlpha += opacity * (1.0 - diskAlpha);
-      }
+      vec3 diskColor = radiatedColor * relativisticBeaming * density * 2.2;
+
+      float sampleOpacity = clamp(density * (stepSize / (0.8 * rs)) * (1.0 - (rXZ - rISCO) / (rDiskOut - rISCO)), 0.0, 0.85);
+      diskColorAccum += diskColor * sampleOpacity * (1.0 - diskAlpha);
+      diskAlpha += sampleOpacity * (1.0 - diskAlpha);
     }
 
     // 2. Primary Thin Photon Ring & Nested Sub-Rings (r ≈ 1.5 * rs)
@@ -299,7 +300,7 @@ void main() {
     col = lensedSky;
   }
 
-  // Composite Accretion Disk & Gargantua Halo Wrap-Around Arc
+  // Composite Accretion Disk & Interstellar Gargantua 3D Halo Wrap-Around
   col = mix(col, diskColorAccum, diskAlpha);
 
   // Composite Primary Photon Ring & Nested Sub-Rings
@@ -323,7 +324,7 @@ void main() {
   }
 
   // ACES Filmic Tone Mapping
-  col = tonemapACES(col * 1.2);
+  col = tonemapACES(col * 1.3);
 
   gl_FragColor = vec4(col, 1.0);
 }
