@@ -111,3 +111,7 @@ npm run build
 - **Stephen Hawking (1974)**: Quantum black hole evaporation
 - **CosmicStudio**: `github.com/bayramkotan/CosmicStudio`
 - **Low-High-Mass-Star-Evolution**: `github.com/axr6077/Low-High-Mass-Star-Evolution`
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
